@@ -124,7 +124,7 @@ impl Fairing for RocketSentry {
                 if config.sentry_dsn.is_empty() {
                     info!("Sentry disabled.");
                 } else {
-                    let traces_sample_rate = config.sentry_transaction_sample_rate.unwrap_or(0f32);
+                    let traces_sample_rate = config.sentry_transaction_sample_rate.unwrap_or(1f32);
                     self.init(&config.sentry_dsn, traces_sample_rate);
                 }
             }
@@ -187,13 +187,15 @@ fn map_status(status: Status) -> protocol::SpanStatus {
 
 #[cfg(test)]
 mod tests {
-    use rocket::local::asynchronous::Client;
-    use crate::request_to_transaction_name;
+    use rocket::local::blocking::Client;
+    use sentry::test::with_captured_events;
+    use futures::executor::block_on;
+    use crate::{request_to_transaction_name, RocketSentry};
 
-    #[rocket::async_test]
-    async fn request_to_sentry_transaction_name_get_no_path() {
+    #[test]
+    fn request_to_sentry_transaction_name_get_no_path() {
         let rocket = rocket::build();
-        let client = Client::tracked(rocket).await.unwrap();
+        let client = Client::tracked(rocket).unwrap();
         let request = client.get("/");
 
         let transaction_name = request_to_transaction_name(request.inner());
@@ -201,10 +203,10 @@ mod tests {
         assert_eq!(transaction_name, "GET /");
     }
 
-    #[rocket::async_test]
-    async fn request_to_sentry_transaction_name_get_some_path() {
+    #[test]
+    fn request_to_sentry_transaction_name_get_some_path() {
         let rocket = rocket::build();
-        let client = Client::tracked(rocket).await.unwrap();
+        let client = Client::tracked(rocket).unwrap();
         let request = client.get("/some/path");
 
         let transaction_name = request_to_transaction_name(request.inner());
@@ -212,15 +214,32 @@ mod tests {
         assert_eq!(transaction_name, "GET /some/path");
     }
 
-    #[rocket::async_test]
-    async fn request_to_sentry_transaction_name_post_path_with_variables() {
+    #[test]
+    fn request_to_sentry_transaction_name_post_path_with_variables() {
         let rocket = rocket::build();
-        let client = Client::tracked(rocket).await.unwrap();
+        let client = Client::tracked(rocket).unwrap();
         let request = client.post("/users/6");
 
         let transaction_name = request_to_transaction_name(request.inner());
 
         // Ideally, we should just returns /users/<id> as configured in the routes
         assert_eq!(transaction_name, "POST /users/6");
+    }
+
+    #[test]
+    fn transaction_set_method_name() {
+        let events = with_captured_events(|| {
+            block_on(async {
+                let rocket = rocket::build()
+                    .attach(RocketSentry::fairing())
+                    .ignite()
+                    .await
+                    .expect("Rocket failed to ignite");
+                let client = Client::tracked(rocket).unwrap();
+                let r = client.get("/").dispatch();
+                assert_eq!(r.status().code, 404);
+            });
+        });
+        assert_eq!(events.len(), 0);
     }
 }
