@@ -24,6 +24,7 @@ async fn fairing_init() {
 #[rocket::async_test]
 async fn fairing_init_with_specific_traces_sampler() {
     let hub = Hub::current();
+    assert!(hub.client().is_none());
 
     let traces_sampler = move |ctx: &TransactionContext| -> f32 {
         match ctx.name() {
