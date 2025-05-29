@@ -55,7 +55,9 @@ use rocket::request::local_cache_once;
 use rocket::serde::Deserialize;
 use rocket::{fairing, Build, Data, Request, Response, Rocket};
 use sentry::protocol::SpanStatus;
-use sentry::{protocol, ClientInitGuard, ClientOptions, Hub, HubSwitchGuard, TracesSampler, Transaction};
+use sentry::{
+    protocol, ClientInitGuard, ClientOptions, Hub, HubSwitchGuard, TracesSampler, Transaction,
+};
 
 const TRANSACTION_OPERATION_NAME: &str = "http.server";
 
@@ -84,7 +86,7 @@ impl RocketSentry {
     }
 
     fn init(&self, dsn: &str, traces_sample_rate: f32, environment: Cow<'static, str>) {
-        let client_config = (
+        let guard = sentry::init((
             dsn,
             ClientOptions {
                 before_send: Some(Arc::new(|event| {
@@ -96,18 +98,14 @@ impl RocketSentry {
                 environment: Some(environment),
                 ..Default::default()
             },
-        );
-        let guard = sentry::init(client_config.clone());
-        let client = sentry::Client::from_config(client_config);
-        
+        ));
 
         if guard.is_enabled() {
             // Tuck the ClientInitGuard in the fairing, so it lives as long as the server.
             let mut self_guard = self.guard.lock().unwrap();
             *self_guard = Some(guard);
-            let scope = Arc::new(sentry::Scope::default());
             let mut self_hub = self.hub.lock().unwrap();
-            *self_hub = Arc::from(Hub::new(Some(Arc::from(client)), scope));
+            *self_hub = Arc::new(Hub::new_from_top(Hub::current()));
 
             info!("Sentry enabled.");
             if traces_sample_rate > 0f32 || self.traces_sampler.is_some() {
@@ -170,7 +168,7 @@ impl Fairing for RocketSentry {
         let self_hub = self.hub.lock().unwrap();
         let _guard = HubSwitchGuard::new(self_hub.clone());
         request.local_cache(|| _guard);
-        
+
         if self.transactions_enabled.load(Ordering::Relaxed) {
             let name = request_to_transaction_name(request);
             let build_transaction = move || Self::start_transaction(&name);
@@ -263,7 +261,7 @@ impl RocketSentryBuilder {
     pub fn build(self) -> RocketSentry {
         RocketSentry {
             guard: Mutex::new(None),
-            hub: Mutex::new(Hub::current()),  // TODO ?
+            hub: Mutex::new(Hub::current()), // TODO ?
             transactions_enabled: AtomicBool::new(false),
             traces_sampler: self.traces_sampler,
         }
