@@ -45,6 +45,25 @@ fn performance_rng() -> String {
     format!("Waited {duration:?}\nTransaction MIGHT be dropped")
 }
 
+#[get("/performance/spans")]
+fn performance_with_customs_spans() -> String {
+    let parent = sentry::configure_scope(|scope| scope.get_span());
+    let first_span = parent.clone().map(|span| span.start_child("db", "reading from db"));
+    let duration = Duration::from_millis(100);
+    thread::sleep(duration);
+    if first_span.is_none() {
+        panic!("No parent transaction");  // Always panic, despite a transaction being created in on_request
+    }
+    first_span.map(|span| span.finish());
+
+
+    let second_span = parent.map(|span| span.start_child("db", "reading from db"));
+    let duration = Duration::from_millis(200);
+    thread::sleep(duration);
+    second_span.map(|span| span.finish());
+    format!("Created custom spans")
+}
+
 #[launch]
 fn rocket() -> Rocket<Build> {
     let rocket_instance = rocket::build();
@@ -80,6 +99,7 @@ fn rocket() -> Rocket<Build> {
             performance_with_parameter,
             performance_skipped,
             performance_rng,
+            performance_with_customs_spans,
         ],
     )
 }
