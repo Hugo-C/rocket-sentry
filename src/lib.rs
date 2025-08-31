@@ -92,6 +92,7 @@ impl RocketSentry {
                 traces_sample_rate,
                 traces_sampler: self.traces_sampler.clone(),
                 environment: Some(environment),
+                enable_logs: true,
                 ..Default::default()
             },
         ));
