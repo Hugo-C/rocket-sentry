@@ -55,15 +55,12 @@ use rocket::request::local_cache_once;
 use rocket::serde::Deserialize;
 use rocket::{fairing, Build, Data, Request, Response, Rocket};
 use sentry::protocol::SpanStatus;
-use sentry::{
-    protocol, ClientInitGuard, ClientOptions, Hub, HubSwitchGuard, TracesSampler, Transaction,
-};
+use sentry::{protocol, ClientInitGuard, ClientOptions, Hub, TracesSampler, Transaction};
 
 const TRANSACTION_OPERATION_NAME: &str = "http.server";
 
 pub struct RocketSentry {
     guard: Mutex<Option<ClientInitGuard>>,
-    hub: Mutex<Arc<Hub>>,
     transactions_enabled: AtomicBool,
     traces_sampler: Option<Arc<TracesSampler>>,
 }
@@ -104,8 +101,6 @@ impl RocketSentry {
             // Tuck the ClientInitGuard in the fairing, so it lives as long as the server.
             let mut self_guard = self.guard.lock().unwrap();
             *self_guard = Some(guard);
-            let mut self_hub = self.hub.lock().unwrap();
-            *self_hub = Arc::new(Hub::new_from_top(Hub::current()));
 
             info!("Sentry enabled.");
             if traces_sample_rate > 0f32 || self.traces_sampler.is_some() {
@@ -118,7 +113,11 @@ impl RocketSentry {
 
     fn start_transaction(name: &str) -> Transaction {
         let transaction_context = sentry::TransactionContext::new(name, TRANSACTION_OPERATION_NAME);
-        sentry::start_transaction(transaction_context)
+        let transaction = sentry::start_transaction(transaction_context);
+        Hub::current().configure_scope(|scope| {
+            scope.set_span(Some(transaction.clone().into()));
+        });
+        transaction
     }
 
     /// Same type as the underlying function so as to retrieve a transaction from the cache.
@@ -165,10 +164,6 @@ impl Fairing for RocketSentry {
     }
 
     async fn on_request(&self, request: &mut Request<'_>, _: &mut Data<'_>) {
-        let self_hub = self.hub.lock().unwrap();
-        let _guard = HubSwitchGuard::new(self_hub.clone());
-        request.local_cache(|| _guard);
-
         if self.transactions_enabled.load(Ordering::Relaxed) {
             let name = request_to_transaction_name(request);
             let build_transaction = move || Self::start_transaction(&name);
@@ -261,7 +256,6 @@ impl RocketSentryBuilder {
     pub fn build(self) -> RocketSentry {
         RocketSentry {
             guard: Mutex::new(None),
-            hub: Mutex::new(Hub::current()), // TODO ?
             transactions_enabled: AtomicBool::new(false),
             traces_sampler: self.traces_sampler,
         }

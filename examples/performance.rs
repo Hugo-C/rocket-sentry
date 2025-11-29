@@ -2,17 +2,26 @@
 extern crate rocket;
 
 use rocket::{Build, Rocket};
-use sentry::TransactionContext;
+use rocket_sentry::RocketSentry;
+use sentry::{Hub, TransactionContext, TransactionOrSpan};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use rocket_sentry::RocketSentry;
-
 #[get("/performance")]
 fn performance() -> String {
-    let duration = Duration::from_millis(500);
+    let parent = Hub::current().configure_scope(|scope| scope.get_span());
+    let custom_span: TransactionOrSpan = match parent {
+        Some(parent) => parent.start_child("some operation", "child 1").into(),
+        None => {
+            let context = TransactionContext::new("standalone", "some operation");
+            sentry::start_transaction(context).into()
+        }
+    };
+    let duration = Duration::from_millis(150);
     thread::sleep(duration);
+    sentry::capture_message("some message", sentry::Level::Warning);
+    custom_span.finish();
     format!("Waited {duration:?}")
 }
 
